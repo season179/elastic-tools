@@ -1,16 +1,28 @@
 import { Client } from "@elastic/elasticsearch";
 import { estypes } from "@elastic/elasticsearch";
 import * as dotenv from 'dotenv';
+import yargs from 'yargs/yargs'; 
 
 // Load environment variables from .env file
 dotenv.config();
 
-// Initialize the Elasticsearch client
-// There are two ways to connect to Elasticsearch:
-// 1. Using ELASTIC_NODE (URL) and ELASTIC_API_KEY
-// 2. Using ELASTIC_CLOUD_ID and ELASTIC_API_KEY
-//
-// This example uses the first approach with the environment variables from .env
+// Define CLI arguments
+const argv = yargs(process.argv.slice(2))
+  .option('startDate', {
+    alias: 's',
+    description: 'Start date in YYYY-MM-DD format (inclusive)',
+    type: 'string',
+    demandOption: true, // Make it required
+  })
+  .option('endDate', {
+    alias: 'e',
+    description: 'End date in YYYY-MM-DD format (exclusive)',
+    type: 'string',
+    demandOption: true, // Make it required
+  })
+  .help()
+  .alias('help', 'h')
+  .parseSync(); 
 
 // Check for required environment variables
 if (!process.env.ELASTIC_CLOUD_ID || !process.env.ELASTIC_API_KEY) {
@@ -67,9 +79,8 @@ async function run() {
                         {
                             range: {
                                 "@timestamp": {
-                                    gte: "2025-02-01T00:00:00.000+08:00", // Start date in UTC+08:00
-                                    lt: "2025-02-02T00:00:00.000+08:00"  // End date in UTC+08:00
-                                    // Using ISO 8601 format with +08:00 offset
+                                    gte: argv.startDate, // Use start date from CLI argument
+                                    lt: argv.endDate    // Use end date from CLI argument
                                 }
                             }
                         }

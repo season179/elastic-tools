@@ -2,23 +2,26 @@
   "name": "elastic-pull",
   "version": "1.0.0",
   "author": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "dependencies": {
     "@elastic/elasticsearch": "^8.10.0",
-    "dotenv": "^16.5.0"
+    "@types/yargs": "^17.0.33",
+    "dotenv": "^16.5.0",
+    "yargs": "^17.7.2"
   },
   "description": "",
   "license": "ISC",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "npm run build && node dist/index.js"
+    "start": "ts-node src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts"
   },
   "devDependencies": {
     "@types/dotenv": "^8.2.3",
-    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
-    "ts-node": "^10.9.2"
-  }
+    "typescript": "^5.3.3"
+  },
+  "keywords": []
 }
