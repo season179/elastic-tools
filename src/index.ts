@@ -1,122 +1,109 @@
-import { Client, estypes } from '@elastic/elasticsearch';
-import dotenv from 'dotenv';
+import { Client } from "@elastic/elasticsearch";
+import { estypes } from "@elastic/elasticsearch";
+import dotenv from "dotenv";
 
-dotenv.config(); // Load environment variables from .env file
+// Load environment variables from .env file
+dotenv.config();
 
-// Define an interface for your document structure (optional but recommended)
-interface PaywatchLog {
-  '@timestamp': string; // Or Date
-  action?: string;
-  payload?: any; // Be more specific if possible, e.g., Record<string, unknown> or a dedicated interface
-  aid?: string;
-  // Add other fields present in your documents
-  [key: string]: any; // Allow other fields
+// Initialize the Elasticsearch client
+// There are two ways to connect to Elasticsearch:
+// 1. Using ELASTIC_NODE (URL) and ELASTIC_API_KEY
+// 2. Using ELASTIC_CLOUD_ID and ELASTIC_API_KEY
+//
+// This example uses the first approach with the environment variables from .env
+
+// Check for required environment variables
+if (!process.env.ELASTIC_CLOUD_ID || !process.env.ELASTIC_API_KEY) {
+    throw new Error(
+        "Missing required environment variables: ELASTIC_CLOUD_ID and/or ELASTIC_API_KEY"
+    );
 }
 
-// --- Configuration ---
-// IMPORTANT: Use environment variables or a secure config management system
-// DO NOT HARDCODE CREDENTIALS IN YOUR CODE
-const ELASTIC_NODE = process.env.ELASTIC_NODE || 'http://localhost:9200'; // Replace with your Elasticsearch URL
-const ELASTIC_API_KEY = process.env.ELASTIC_API_KEY; // Use API Key or other auth methods
-const INDEX_PATTERN = 'my_paywatch_logs-*'; // Adjust to your actual index name or pattern
+const client = new Client({
+    cloud: { id: process.env.ELASTIC_CLOUD_ID as string },
+    auth: { apiKey: process.env.ELASTIC_API_KEY as string },
+});
 
-// --- Create Elasticsearch Client ---
-// Use API Key Authentication (Recommended)
-// Ensure you have the API Key ID and Value
-let client: Client;
-if (ELASTIC_API_KEY) {
-   client = new Client({
-    node: ELASTIC_NODE,
-    auth: {
-      apiKey: ELASTIC_API_KEY
-    },
-    // Add other configurations like TLS/SSL if needed
-    // ssl: { rejectUnauthorized: false } // Use cautiously for development only
-  });
-} else {
-  // Add other authentication methods if needed (e.g., username/password)
-  console.warn('Elasticsearch API Key not provided. Trying anonymous connection.');
-   client = new Client({ node: ELASTIC_NODE });
+// Alternative configuration using Node URL:
+// const client = new Client({
+//   node: process.env.ELASTIC_NODE,
+//   auth: { apiKey: process.env.ELASTIC_API_KEY }
+// })
+
+// Define the structure of the documents we expect to retrieve
+interface LogDocument {
+    "@timestamp": string; // Elasticsearch timestamp field
+    uid: string;        // User ID field
+    payload: any;       // Payload field (can be complex)
+    message?: string;   // Optional: Field likely containing "RetrieveUserInfo"
+    action?: string;    // Optional: Field likely containing "response"
+    // Add other relevant fields if known
 }
 
+async function run() {
+    const indexPattern = "prod-my-storage-logs-alias";
+    console.log(`Querying index pattern: ${indexPattern}`);
 
-// --- Build the Query ---
-async function fetchPaywatchLogs() {
-  try {
-    console.log(`Querying index pattern: ${INDEX_PATTERN}`);
+    try {
+        const result = await client.search<LogDocument>({
+            index: indexPattern,
+            size: 50, // Retrieve up to 50 matching documents
+            _source: ["@timestamp", "uid", "payload"], // Specify fields to retrieve
+            query: {
+                bool: {
+                    must: [
+                        // Revert to 'match' query for 'module'
+                        { match: { module: "RetrieveUserInfo" } },
+                        // Use 'match' query for potentially analyzed 'action' field
+                        { match: { action: "response" } }
+                    ],
+                    filter: [
+                        {
+                            range: {
+                                "@timestamp": {
+                                    gte: "2025-02-01T00:00:00.000+08:00", // Start date in UTC+08:00
+                                    lte: "2025-02-05T00:00:00.000+08:00"  // End date in UTC+08:00
+                                    // Using ISO 8601 format with +08:00 offset
+                                }
+                            }
+                        }
+                    ]
+                },
+            },
+            sort: [
+                { "@timestamp": { order: "desc" } } // Sort by timestamp, newest first
+            ]
+        });
 
-    const requestBody: estypes.SearchRequest = {
-      index: INDEX_PATTERN,
-      size: 100, // How many results per page (Kibana default is often 500, adjust as needed)
-                 // NOTE: The screenshot shows >127k results. You'll need pagination (from/size or search_after)
-                 // to retrieve all of them reliably. This example gets the first 100.
-      sort: [
-        { '@timestamp': { order: 'desc' } } // Default Kibana sort
-      ],
-      query: {
-        bool: {
-          // KQL "and" clauses go into "must" or "filter"
-          must: [
-            // KQL free text search: "RetrieveUserInfo"
-            // This searches default fields. Adjust 'query' or field list if needed.
-            {
-              query_string: {
-                query: '"RetrieveUserInfo"', // Keep quotes if it's a phrase search
-                // default_field: '*' // Or specify fields like ['message', 'payload.somefield']
-              }
-            }
-          ],
-          filter: [
-            // KQL field query: action:response
-            // Use 'term' for exact keyword matches (common for fields like 'action')
-            // Use 'match' if the 'action' field is analyzed text
-            { term: { 'action.keyword': 'response' } }, // Adjust field name if needed (e.g., 'action' or 'action.keyword')
+        const totalHits = typeof result.hits.total === 'number'
+            ? result.hits.total
+            : result.hits.total?.value || 0;
 
-            // Time Range Filter
-            {
-              range: {
-                '@timestamp': { // Use your actual time field name
-                  gte: '2025-02-01T00:00:00.000Z', // Use ISO 8601 format. 'Z' denotes UTC. Adjust timezone if necessary.
-                  lte: '2025-02-05T00:00:00.000Z', // 'lte' for less than or equal to
-                  format: 'strict_date_optional_time' // Specify format if needed
+        console.log(`Found ${totalHits} matching documents.`);
+
+        if (result.hits.hits.length > 0) {
+            console.log("\nRetrieved documents:");
+            result.hits.hits.forEach((hit) => {
+                console.log("----------------------------------------");
+                if (hit._source) {
+                    console.log(`Timestamp: ${hit._source["@timestamp"]}`);
+                    console.log(`UID:       ${hit._source.uid}`);
+                    console.log(`Payload:   ${JSON.stringify(hit._source.payload, null, 2)}`); 
+                } else {
+                    console.log("Document source is missing.");
                 }
-              }
-            }
-          ]
+            });
+        } else {
+            console.log("No documents matched the specified criteria.");
         }
-      },
-      // _source: ['aid', 'payload', '@timestamp'] // Optionally specify only needed fields for performance
-    };
 
-    console.log("Sending query to Elasticsearch:", JSON.stringify(requestBody, null, 2));
-
-    const response: estypes.SearchResponse<PaywatchLog> = await client.search(requestBody);
-
-    console.log(`Total Hits: ${response.hits.total ? (response.hits.total as any).value : 0}`);
-
-    // Extract the documents
-    const documents = response.hits.hits.map(hit => ({
-      id: hit._id,
-      score: hit._score,
-      ...hit._source // Spread the document source fields
-    }));
-
-    console.log(`Retrieved ${documents.length} documents:`);
-    documents.forEach((doc, index) => {
-      console.log(`--- Document ${index + 1} (ID: ${doc.id}) ---`);
-      console.log(JSON.stringify(doc, null, 2));
-    });
-
-    return documents;
-
-  } catch (error) {
-    console.error('Error querying Elasticsearch:', error instanceof Error ? error.message : error);
-     if (error && typeof error === 'object' && 'meta' in error) {
-       console.error('Elasticsearch client error details:', JSON.stringify((error as any).meta?.body || error, null, 2));
-     }
-    return [];
-  }
+    } catch (error) {
+        console.error("Error executing search:", error);
+        const errorBody = (error as any)?.meta?.body;
+        if (errorBody) {
+            console.error("Elasticsearch error details:", JSON.stringify(errorBody, null, 2));
+        }
+    }
 }
 
-// --- Run the query ---
-fetchPaywatchLogs();
+run().catch(console.log);
