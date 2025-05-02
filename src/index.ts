@@ -46,11 +46,112 @@ const client = new Client({
 
 // Define the structure of the documents we expect to retrieve
 interface LogDocument {
-    "@timestamp": string; // Elasticsearch timestamp field
-    uid: string;        // User ID field
+    "@timestamp": string; // Timestamp field
+    uid: string;         // UID field
     payload: any;       // Payload field (can be complex)
     // Add other relevant fields if known
 }
+
+// --- Added Interfaces and Helper Function Start ---
+interface ProcessedPayload {
+    profile?: {
+        email?: string;
+        mobile?: string;
+        name?: string;
+        idType?: string;
+        idNo?: string;
+    };
+    employment?: {
+        id?: string;
+        eid?: string;
+        salaryDetails?: {
+            salary?: number;
+        };
+    };
+}
+
+interface ProcessedLogDocument {
+    "@timestamp": string;
+    uid: string;
+    payload: ProcessedPayload;
+}
+
+// Helper function to extract desired fields
+function extractPayloadFields(source: LogDocument): ProcessedLogDocument | null {
+    if (!source || !source.payload) {
+        console.warn("Skipping hit with missing source or payload:", source?.uid);
+        return null;
+    }
+
+    let parsedPayload: any;
+    try {
+        // Assuming payload is a stringified JSON, potentially double-encoded
+        if (typeof source.payload === 'string') {
+            try {
+                // First attempt: assume single JSON string
+                parsedPayload = JSON.parse(source.payload);
+            } catch (e) {
+                // Second attempt: handle potential double escaping like \""
+                try {
+                   const correctedString = source.payload.replace(/\\"/g, '"');
+                   // Check if it starts/ends with extra quotes after replacement
+                   if (correctedString.startsWith('"') && correctedString.endsWith('"')) {
+                       parsedPayload = JSON.parse(correctedString.slice(1, -1));
+                   } else {
+                       parsedPayload = JSON.parse(correctedString);
+                   }
+                } catch (e2) {
+                     console.error(`Error parsing payload JSON for UID ${source.uid}:`, e2, "Original payload:", source.payload);
+                     return null; // Skip if parsing fails
+                }
+            }
+        } else {
+            // If it's already an object (less likely based on example)
+             parsedPayload = source.payload;
+        }
+
+        if (typeof parsedPayload !== 'object' || parsedPayload === null) {
+             console.warn(`Parsed payload is not an object for UID ${source.uid}. Type: ${typeof parsedPayload}`);
+             return null;
+        }
+
+    } catch (error) {
+        console.error(`Error processing payload for UID ${source.uid}:`, error, "Payload:", source.payload);
+        return null; // Skip if any processing error occurs
+    }
+
+    const processed: ProcessedPayload = {};
+
+    // Extract profile fields
+    if (parsedPayload.profile) {
+        processed.profile = {
+            email: parsedPayload.profile.email,
+            mobile: parsedPayload.profile.mobile,
+            name: parsedPayload.profile.name,
+            idType: parsedPayload.profile.idType,
+            idNo: parsedPayload.profile.idNo,
+        };
+    }
+
+    // Extract employment fields (assuming we take the first employment entry)
+    if (parsedPayload.employment && Array.isArray(parsedPayload.employment) && parsedPayload.employment.length > 0) {
+        const firstEmployment = parsedPayload.employment[0];
+        processed.employment = {
+            id: firstEmployment.id,
+            eid: firstEmployment.eid,
+            salaryDetails: firstEmployment.salaryDetails ? {
+                salary: firstEmployment.salaryDetails.salary
+            } : undefined
+        };
+    }
+
+    return {
+        "@timestamp": source["@timestamp"],
+        uid: source.uid,
+        payload: processed
+    };
+}
+// --- Added Interfaces and Helper Function End ---
 
 async function run() {
     // Use environment variable for the index pattern
@@ -63,7 +164,7 @@ async function run() {
     console.log(`Querying index pattern: ${indexPattern}`);
     let exitCode = 0; // Default to success
     let scrollId: string | undefined = undefined; // To store scroll ID
-    const allHits: LogDocument[] = []; // To accumulate all hits
+    const allHits: ProcessedLogDocument[] = []; // Store processed hits
 
     try {
         // Initial search request with scroll parameter
@@ -104,11 +205,14 @@ async function run() {
         // Accumulate initial batch of hits
         currentHits.forEach(hit => {
             if (hit._source) {
-                allHits.push(hit._source);
+                const processed = extractPayloadFields(hit._source);
+                if (processed) {
+                    allHits.push(processed);
+                }
             }
         });
 
-        console.log(`Initial fetch: ${currentHits.length} hits.`);
+        console.log(`Initial fetch: ${currentHits.length} hits, processed: ${allHits.length}.`);
 
         // Loop through subsequent pages using the scroll API
         while (scrollId && currentHits.length > 0) {
@@ -123,11 +227,17 @@ async function run() {
 
             if (currentHits.length > 0) {
                 console.log(`Fetched ${currentHits.length} more hits.`);
+                let processedCount = 0;
                 currentHits.forEach(hit => {
                     if (hit._source) {
-                        allHits.push(hit._source);
+                        const processed = extractPayloadFields(hit._source);
+                        if (processed) {
+                            allHits.push(processed);
+                            processedCount++;
+                        }
                     }
                 });
+                console.log(`Processed ${processedCount} hits from this batch.`);
             } else {
                 console.log("No more hits to fetch.");
             }
@@ -140,25 +250,43 @@ async function run() {
             const dataDir = path.join(__dirname, '..', 'data');
             if (!fs.existsSync(dataDir)) {
                 fs.mkdirSync(dataDir, { recursive: true });
-                console.log(`Created data directory: ${dataDir}`);
             }
+            
+            // Construct filename with date range
+            const startDateStr = argv.startDate.split('T')[0]; // Get YYYY-MM-DD
+            const endDateStr = argv.endDate.split('T')[0];   // Get YYYY-MM-DD
+            const filename = path.join(dataDir, `elastic_data_${startDateStr}_to_${endDateStr}.csv`);
 
-            const fileName = `${argv.startDate}-${argv.endDate}.csv`; // Updated filename
-            const filePath = path.join(dataDir, fileName);
+            // Prepare headers - adjust based on ProcessedLogDocument structure
+            const headers = ['"@timestamp"', '"uid"', '"profile.email"', '"profile.mobile"', '"profile.name"', '"profile.idType"', '"profile.idNo"', '"employment.id"', '"employment.eid"', '"employment.salaryDetails.salary"'];
+            const csvWriter = fs.createWriteStream(filename);
+            csvWriter.write(headers.join(',') + '\n');
 
-            const headers = ['"@timestamp"', '"uid"', '"payload"'].join(',');
-            const rows = allHits.map(source => {
-                const timestamp = source["@timestamp"] || '';
-                const uid = source.uid || '';
-                const payload = source.payload ? `"${JSON.stringify(source.payload).replace(/"/g, '""')}"` : '""';
-                return [timestamp, uid, payload].join(',');
+            // Write data rows
+            allHits.forEach(doc => {
+                const profile = doc.payload.profile || {};
+                const employment = doc.payload.employment || {};
+                const salaryDetails = employment.salaryDetails || {};
+
+                const row = [
+                    `"${doc['@timestamp']}"`, 
+                    `"${doc.uid}"`,
+                    `"${profile.email || ''}"`,
+                    `"${profile.mobile || ''}"`,
+                    `"${profile.name || ''}"`,
+                    `"${profile.idType || ''}"`,
+                    `"${profile.idNo || ''}"`,
+                    `"${employment.id || ''}"`,
+                    `"${employment.eid || ''}"`,
+                    `"${salaryDetails.salary !== undefined ? salaryDetails.salary : ''}"` // Handle potential undefined salary
+                ];
+                csvWriter.write(row.join(',') + '\n');
             });
 
-            const csvContent = `${headers}\n${rows.join('\n')}`;
-            fs.writeFileSync(filePath, csvContent);
-            console.log(`All ${allHits.length} results saved to ${filePath}`);
+            csvWriter.end();
+            console.log(`\nData successfully written to ${filename}`);
         } else {
-            console.log("No documents matched the specified criteria to save.");
+            console.log("\nNo documents matched the criteria.");
         }
         // ---- CSV Writing Logic End ----
     } catch (error) {
