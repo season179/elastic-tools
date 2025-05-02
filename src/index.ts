@@ -1,6 +1,6 @@
 import { Client } from "@elastic/elasticsearch";
 import { estypes } from "@elastic/elasticsearch";
-import dotenv from "dotenv";
+import * as dotenv from 'dotenv';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -35,13 +35,17 @@ interface LogDocument {
     "@timestamp": string; // Elasticsearch timestamp field
     uid: string;        // User ID field
     payload: any;       // Payload field (can be complex)
-    message?: string;   // Optional: Field likely containing "RetrieveUserInfo"
-    action?: string;    // Optional: Field likely containing "response"
     // Add other relevant fields if known
 }
 
 async function run() {
-    const indexPattern = "prod-my-storage-logs-alias";
+    // Use environment variable for the index pattern
+    const indexPattern = process.env.ELASTIC_INDEX_PATTERN;
+    if (!indexPattern) {
+        console.error("Error: ELASTIC_INDEX_PATTERN environment variable is not set.");
+        process.exit(1); // Exit if the crucial variable is missing
+    }
+
     console.log(`Querying index pattern: ${indexPattern}`);
     let exitCode = 0; // Default to success
 
@@ -64,7 +68,7 @@ async function run() {
                             range: {
                                 "@timestamp": {
                                     gte: "2025-02-01T00:00:00.000+08:00", // Start date in UTC+08:00
-                                    lte: "2025-02-05T00:00:00.000+08:00"  // End date in UTC+08:00
+                                    lt: "2025-02-02T00:00:00.000+08:00"  // End date in UTC+08:00
                                     // Using ISO 8601 format with +08:00 offset
                                 }
                             }
