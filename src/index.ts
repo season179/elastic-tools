@@ -4,6 +4,7 @@ import * as dotenv from 'dotenv';
 import yargs from 'yargs/yargs'; 
 import * as fs from 'fs';
 import * as path from 'path';
+import { parse, addDays, format } from 'date-fns'; 
 
 // Load environment variables from .env file
 dotenv.config();
@@ -12,13 +13,13 @@ dotenv.config();
 const argv = yargs(process.argv.slice(2))
   .option('startDate', {
     alias: 's',
-    description: 'Start date in YYYY-MM-DD format (inclusive)',
+    description: 'Start date in YYYY-MM-DD format (inclusive, interpreted as GMT+08)',
     type: 'string',
     demandOption: true, // Make it required
   })
   .option('endDate', {
     alias: 'e',
-    description: 'End date in YYYY-MM-DD format (exclusive)',
+    description: 'End date in YYYY-MM-DD format (exclusive, interpreted as GMT+08)',
     type: 'string',
     demandOption: true, // Make it required
   })
@@ -167,6 +168,14 @@ async function run() {
     const allHits: ProcessedLogDocument[] = []; // Store processed hits
 
     try {
+        // --- Calculate Date Range Start ---
+        // Construct timezone-aware ISO strings for Elasticsearch
+        // The start date is inclusive (beginning of the day)
+        const esStartDate = `${argv.startDate}T00:00:00+08:00`; 
+        // The end date is exclusive (beginning of the day)
+        const esEndDate = `${argv.endDate}T00:00:00+08:00`; 
+        console.log(`Querying from ${esStartDate} (>=) to ${esEndDate} (<)`);
+
         // Initial search request with scroll parameter
         const response = await client.search<LogDocument>({
             index: indexPattern,
@@ -186,8 +195,10 @@ async function run() {
                         {
                             range: {
                                 "@timestamp": {
-                                    gte: argv.startDate, // Use start date from CLI argument
-                                    lt: argv.endDate    // Use end date from CLI argument
+                                    gte: esStartDate, // Use calculated start date
+                                    lt: esEndDate,    // Use calculated end date
+                                    format: "strict_date_optional_time||epoch_millis", // Specify expected format
+                                    time_zone: "+08:00" // Explicitly set timezone for parsing robustness
                                 }
                             }
                         }
@@ -252,13 +263,13 @@ async function run() {
                 fs.mkdirSync(dataDir, { recursive: true });
             }
             
-            // Construct filename with date range
-            const startDateStr = argv.startDate.split('T')[0]; // Get YYYY-MM-DD
-            const endDateStr = argv.endDate.split('T')[0];   // Get YYYY-MM-DD
+            // Construct filename with date range (using original input dates)
+            const startDateStr = argv.startDate; // Use input YYYY-MM-DD
+            const endDateStr = argv.endDate;   // Use input YYYY-MM-DD
             const filename = path.join(dataDir, `elastic_data_${startDateStr}_to_${endDateStr}.csv`);
 
             // Prepare headers - adjust based on ProcessedLogDocument structure
-            const headers = ['"@timestamp"', '"uid"', '"profile.email"', '"profile.mobile"', '"profile.name"', '"profile.idType"', '"profile.idNo"', '"employment.id"', '"employment.eid"', '"employment.salaryDetails.salary"'];
+            const headers = ['login_time', 'uid', 'email', 'mobile', 'name', 'id_type', 'id_no', 'ebid', 'eid', 'salary'];
             const csvWriter = fs.createWriteStream(filename);
             csvWriter.write(headers.join(',') + '\n');
 
@@ -278,7 +289,7 @@ async function run() {
                     `"${profile.idNo || ''}"`,
                     `"${employment.id || ''}"`,
                     `"${employment.eid || ''}"`,
-                    `"${salaryDetails.salary !== undefined ? salaryDetails.salary : ''}"` // Handle potential undefined salary
+                    salaryDetails.salary !== undefined && salaryDetails.salary !== null ? salaryDetails.salary : '' 
                 ];
                 csvWriter.write(row.join(',') + '\n');
             });
