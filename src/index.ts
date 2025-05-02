@@ -43,12 +43,14 @@ interface LogDocument {
 async function run() {
     const indexPattern = "prod-my-storage-logs-alias";
     console.log(`Querying index pattern: ${indexPattern}`);
+    let exitCode = 0; // Default to success
 
     try {
         const result = await client.search<LogDocument>({
             index: indexPattern,
-            size: 50, // Retrieve up to 50 matching documents
+            size: 1, // Retrieve up to 50 matching documents
             _source: ["@timestamp", "uid", "payload"], // Specify fields to retrieve
+            track_total_hits: true, // Add this line to get the exact count
             query: {
                 bool: {
                     must: [
@@ -96,13 +98,24 @@ async function run() {
         } else {
             console.log("No documents matched the specified criteria.");
         }
-
     } catch (error) {
         console.error("Error executing search:", error);
         const errorBody = (error as any)?.meta?.body;
         if (errorBody) {
             console.error("Elasticsearch error details:", JSON.stringify(errorBody, null, 2));
         }
+        exitCode = 1; // Set exit code to error
+    } finally {
+        // Ensure client connection is closed before exiting
+        console.log("Closing Elasticsearch client connection...");
+        try {
+            await client.close(); // Attempt to close the client
+            console.log("Client closed.");
+        } catch (closeError) {
+            console.error("Error closing Elasticsearch client:", closeError);
+            exitCode = 1; // Ensure we exit with an error code if closing fails
+        }
+        process.exit(exitCode); // Exit with the appropriate code
     }
 }
 
