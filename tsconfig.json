@@ -30,5 +30,5 @@
     "moduleResolution": "NodeNext" // Use Node.js's module resolution strategy
   },
   "include": ["src/**/*"], // Include all files in the src directory
-  "exclude": ["node_modules", "dist"] // Exclude node_modules and dist directory
+  "exclude": ["node_modules", "dist", "src/generated/prisma"]
 }

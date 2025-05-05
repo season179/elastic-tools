@@ -136,3 +136,4 @@ dist
 .pnp.*
 
 data/
+src/generated/prisma/*.node

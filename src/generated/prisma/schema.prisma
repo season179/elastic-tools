@@ -1,0 +1,35 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Define the model based on the CSV structure
+model UserLogin {
+  id         Int      @id @default(autoincrement()) // Auto-incrementing primary key
+  login_time DateTime @db.Timestamp(6) // Timestamp with precision
+  uid        String
+  email      String?
+  mobile     String?
+  name       String?
+  id_type    String?
+  id_no      String?
+  ebid       String?
+  eid        String?
+  salary     Int?
+
+  // Optional: Add indexes for faster queries on frequently searched columns
+  @@index([login_time])
+  @@index([uid])
+  @@index([email])
+}
