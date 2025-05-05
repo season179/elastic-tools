@@ -48,14 +48,21 @@ async function run() {
             totalProcessedCount += rawDocs.length;
             console.log(`Fetched batch of ${rawDocs.length}. Total fetched: ${totalProcessedCount}`);
 
-            for (const rawDoc of rawDocs) {
-                const processedDoc = extractPayloadFields(rawDoc);
+            // --- Optimization: Process documents in the current batch in parallel ---
+            const processingPromises = rawDocs.map(rawDoc => 
+                Promise.resolve(extractPayloadFields(rawDoc)) // Wrap in Promise.resolve in case extractPayloadFields is not async
+            );
+            const processedDocs = await Promise.all(processingPromises);
+
+            // Filter out null results (skipped docs) and add to the main batch
+            for (const processedDoc of processedDocs) {
                 if (processedDoc) {
                     processedBatch.push(processedDoc);
                 } else {
                     totalSkippedPayloadCount++;
                 }
             }
+            // --- End Optimization ---
 
             // Insert batch if it reaches the desired size
             if (processedBatch.length >= batchSize) {
