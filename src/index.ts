@@ -5,9 +5,13 @@ import yargs from 'yargs/yargs';
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse, addDays, format } from 'date-fns'; 
+import { PrismaClient, Prisma } from '@prisma/client';
 
 // Load environment variables from .env file
 dotenv.config();
+
+// Initialize Prisma Client
+const prisma = new PrismaClient();
 
 // Define CLI arguments
 const argv = yargs(process.argv.slice(2))
@@ -80,7 +84,6 @@ interface ProcessedLogDocument {
 // Helper function to extract desired fields
 function extractPayloadFields(source: LogDocument): ProcessedLogDocument | null {
     if (!source || !source.payload) {
-        console.warn("Skipping hit with missing source or payload:", source?.uid);
         return null;
     }
 
@@ -102,7 +105,6 @@ function extractPayloadFields(source: LogDocument): ProcessedLogDocument | null 
                        parsedPayload = JSON.parse(correctedString);
                    }
                 } catch (e2) {
-                     console.error(`Error parsing payload JSON for UID ${source.uid}:`, e2, "Original payload:", source.payload);
                      return null; // Skip if parsing fails
                 }
             }
@@ -112,12 +114,10 @@ function extractPayloadFields(source: LogDocument): ProcessedLogDocument | null 
         }
 
         if (typeof parsedPayload !== 'object' || parsedPayload === null) {
-             console.warn(`Parsed payload is not an object for UID ${source.uid}. Type: ${typeof parsedPayload}`);
              return null;
         }
 
     } catch (error) {
-        console.error(`Error processing payload for UID ${source.uid}:`, error, "Payload:", source.payload);
         return null; // Skip if any processing error occurs
     }
 
@@ -165,7 +165,15 @@ async function run() {
     console.log(`Querying index pattern: ${indexPattern}`);
     let exitCode = 0; // Default to success
     let scrollId: string | undefined = undefined; // To store scroll ID
-    const allHits: ProcessedLogDocument[] = []; // Store processed hits
+
+    // --- DB Insert Variables ---
+    const batchSize = 1000; // Adjust batch size as needed
+    let batchToInsert = []; // Let TypeScript infer the type
+    let totalProcessedCount = 0;
+    let totalInsertedCount = 0;
+    let totalSkippedPayloadCount = 0;
+    let totalFailedToInsertCount = 0;
+    // --- End DB Insert Variables ---
 
     try {
         // --- Calculate Date Range Start ---
@@ -199,10 +207,10 @@ async function run() {
                                     lt: esEndDate,    // Use calculated end date
                                     format: "strict_date_optional_time||epoch_millis", // Specify expected format
                                     time_zone: "+08:00" // Explicitly set timezone for parsing robustness
-                                }
-                            }
-                        }
-                    ]
+                                },
+                            },
+                        },
+                    ],
                 },
             },
             sort: [
@@ -210,128 +218,144 @@ async function run() {
             ]
         });
 
-        let currentHits = response.hits.hits;
         scrollId = response._scroll_id;
+        let hits = response.hits.hits;
 
-        // Accumulate initial batch of hits
-        currentHits.forEach(hit => {
-            if (hit._source) {
-                const processed = extractPayloadFields(hit._source);
-                if (processed) {
-                    allHits.push(processed);
+        if (response.hits.total) {
+            console.log(`Total hits found: ${typeof response.hits.total === 'number' ? response.hits.total : response.hits.total.value}`);
+        } else {
+             console.log("Total hits not available in response.");
+        }
+
+        // --- Process and Insert Loop ---
+        while (hits && hits.length > 0) {
+            console.log(`Processing batch of ${hits.length} hits...`);
+            totalProcessedCount += hits.length;
+
+            for (const hit of hits) {
+                if (!hit._source) continue; // Skip if no source data
+
+                const processedDoc = extractPayloadFields(hit._source as LogDocument);
+
+                if (processedDoc) {
+                     try {
+                         // Map to Prisma model
+                         const prismaData = { // Type is inferred here
+                             login_time: new Date(processedDoc["@timestamp"]), // Convert string timestamp to Date
+                             uid:        processedDoc.uid,
+                             email:      processedDoc.payload.profile?.email ?? null,
+                             mobile:     processedDoc.payload.profile?.mobile ?? null,
+                             name:       processedDoc.payload.profile?.name ?? null,
+                             id_type:    processedDoc.payload.profile?.idType ?? null,
+                             id_no:      processedDoc.payload.profile?.idNo ?? null,
+                             ebid:       processedDoc.payload.employment?.id ?? null,
+                             eid:        processedDoc.payload.employment?.eid ?? null,
+                             salary:     processedDoc.payload.employment?.salaryDetails?.salary ?? null,
+                         };
+
+                         // Validate required fields ( Prisma schema handles nullability, but extra check for login_time/uid)
+                         if (!prismaData.login_time || isNaN(prismaData.login_time.getTime()) || !prismaData.uid) {
+                            totalSkippedPayloadCount++;
+                            continue;
+                         }
+
+                         batchToInsert.push(prismaData);
+                     } catch (mappingError) {
+                         totalSkippedPayloadCount++;
+                     }
+                } else {
+                     totalSkippedPayloadCount++; // Count hits skipped due to payload processing issues
                 }
             }
-        });
 
-        console.log(`Initial fetch: ${currentHits.length} hits, processed: ${allHits.length}.`);
+            // Insert batch if size reached
+            if (batchToInsert.length >= batchSize) {
+                 console.log(`Attempting to insert batch of ${batchToInsert.length} records...`);
+                try {
+                    const result = await prisma.userLogin.createMany({
+                        data: batchToInsert,
+                        skipDuplicates: true, // Skip records violating the unique constraint
+                    });
+                    console.log(`Successfully inserted ${result.count} records.`);
+                    totalInsertedCount += result.count;
+                    if (batchToInsert.length !== result.count) {
+                        totalFailedToInsertCount += (batchToInsert.length - result.count);
+                    }
+                } catch (dbError) {
+                    console.error("Error inserting batch into database:", dbError);
+                    totalFailedToInsertCount += batchToInsert.length; // Assume all failed if batch insert throws
+                    exitCode = 1; // Mark run as failed
+                }
+                batchToInsert = []; // Reset batch
+            }
 
-        // Loop through subsequent pages using the scroll API
-        while (scrollId && currentHits.length > 0) {
-            console.log(`Fetching next batch with scroll_id: ${scrollId.substring(0, 10)}...`);
+            // Fetch the next batch of results
+            console.log("Fetching next scroll batch...");
             const scrollResponse = await client.scroll<LogDocument>({
                 scroll_id: scrollId,
-                scroll: '1m'
+                scroll: '1m',
             });
 
-            scrollId = scrollResponse._scroll_id; // Update scroll ID for the next iteration
-            currentHits = scrollResponse.hits.hits;
+            // Update scroll ID and hits for the next iteration
+            scrollId = scrollResponse._scroll_id;
+            hits = scrollResponse.hits.hits;
+        }
+         // --- End Process and Insert Loop ---
 
-            if (currentHits.length > 0) {
-                console.log(`Fetched ${currentHits.length} more hits.`);
-                let processedCount = 0;
-                currentHits.forEach(hit => {
-                    if (hit._source) {
-                        const processed = extractPayloadFields(hit._source);
-                        if (processed) {
-                            allHits.push(processed);
-                            processedCount++;
-                        }
-                    }
-                });
-                console.log(`Processed ${processedCount} hits from this batch.`);
-            } else {
-                console.log("No more hits to fetch.");
-            }
+        // Insert any remaining records in the final batch
+        if (batchToInsert.length > 0) {
+            console.log(`Attempting to insert final batch of ${batchToInsert.length} records...`);
+             try {
+                 const result = await prisma.userLogin.createMany({
+                     data: batchToInsert,
+                     skipDuplicates: true,
+                 });
+                 console.log(`Successfully inserted ${result.count} records.`);
+                 totalInsertedCount += result.count;
+                 if (batchToInsert.length !== result.count) {
+                    totalFailedToInsertCount += (batchToInsert.length - result.count);
+                 }
+             } catch (dbError) {
+                 console.error("Error inserting final batch into database:", dbError);
+                 totalFailedToInsertCount += batchToInsert.length;
+                 exitCode = 1; // Mark run as failed
+             }
         }
 
-        console.log(`\nTotal documents retrieved: ${allHits.length}`);
-
-        // ---- CSV Writing Logic Start (after collecting all hits) ----
-        if (allHits.length > 0) {
-            const dataDir = path.join(__dirname, '..', 'data');
-            if (!fs.existsSync(dataDir)) {
-                fs.mkdirSync(dataDir, { recursive: true });
-            }
-            
-            // Construct filename with date range (using original input dates)
-            const startDateStr = argv.startDate; // Use input YYYY-MM-DD
-            const endDateStr = argv.endDate;   // Use input YYYY-MM-DD
-            const filename = path.join(dataDir, `elastic_data_${startDateStr}_to_${endDateStr}.csv`);
-
-            // Prepare headers - adjust based on ProcessedLogDocument structure
-            const headers = ['login_time', 'uid', 'email', 'mobile', 'name', 'id_type', 'id_no', 'ebid', 'eid', 'salary'];
-            const csvWriter = fs.createWriteStream(filename);
-            csvWriter.write(headers.join(',') + '\n');
-
-            // Write data rows
-            allHits.forEach(doc => {
-                const profile = doc.payload.profile || {};
-                const employment = doc.payload.employment || {};
-                const salaryDetails = employment.salaryDetails || {};
-
-                const row = [
-                    `"${doc['@timestamp']}"`, 
-                    `"${doc.uid}"`,
-                    `"${profile.email || ''}"`,
-                    `"${profile.mobile || ''}"`,
-                    `"${profile.name || ''}"`,
-                    `"${profile.idType || ''}"`,
-                    `"${profile.idNo || ''}"`,
-                    `"${employment.id || ''}"`,
-                    `"${employment.eid || ''}"`,
-                    salaryDetails.salary !== undefined && salaryDetails.salary !== null ? salaryDetails.salary : '' 
-                ];
-                csvWriter.write(row.join(',') + '\n');
-            });
-
-            csvWriter.end();
-            console.log(`\nData successfully written to ${filename}`);
-        } else {
-            console.log("\nNo documents matched the criteria.");
-        }
-        // ---- CSV Writing Logic End ----
     } catch (error) {
-        console.error("Error executing search or scroll:", error);
-        const errorBody = (error as any)?.meta?.body;
-        if (errorBody) {
-            console.error("Elasticsearch error details:", JSON.stringify(errorBody, null, 2));
-        }
-        exitCode = 1; // Set exit code to error
+        console.error("An error occurred during the process:", error);
+        exitCode = 1; // Mark run as failed
     } finally {
-        // Ensure client connection is closed before exiting
-        console.log("Closing Elasticsearch client connection...");
         // Clear the scroll context if it exists
         if (scrollId) {
+            console.log("Clearing scroll context...");
             try {
-                console.log(`Clearing scroll context: ${scrollId.substring(0, 10)}...`);
-                await client.clearScroll({
-                    scroll_id: scrollId,
-                });
+                await client.clearScroll({ scroll_id: scrollId });
                 console.log("Scroll context cleared.");
             } catch (clearScrollError) {
-                console.error("Error clearing scroll context:", clearScrollError);
-                // Don't necessarily exit with error 1 just because clearScroll failed
+                 console.error("Failed to clear scroll context:", clearScrollError);
             }
         }
-        try {
-            await client.close(); // Attempt to close the client
-            console.log("Client closed.");
-        } catch (closeError) {
-            console.error("Error closing Elasticsearch client:", closeError);
-            exitCode = 1; // Ensure we exit with an error code if closing fails
-        }
-        process.exit(exitCode); // Exit with the appropriate code
+
+        // Disconnect Prisma Client
+         console.log("Disconnecting Prisma Client...");
+        await prisma.$disconnect();
+         console.log("Prisma Client disconnected.");
+
+         // --- Final Summary --- 
+         console.log("\n--- Data Load Summary ---");
+         console.log(`Total Elasticsearch hits processed: ${totalProcessedCount}`);
+         console.log(`Records skipped due to payload processing/mapping errors: ${totalSkippedPayloadCount}`);
+         console.log(`Records successfully inserted into database: ${totalInsertedCount}`);
+         console.log(`Records skipped during insert (duplicates or errors): ${totalFailedToInsertCount}`);
+         console.log(`-------------------------`);
+
+        console.log(`Script finished with exit code ${exitCode}.`); // Corrected template literal syntax
+        process.exit(exitCode); // Exit with appropriate code
     }
 }
 
-run().catch(console.log);
+run().catch(error => {
+    console.error("Unhandled error in run function:", error);
+    prisma.$disconnect().finally(() => process.exit(1)); // Ensure disconnect on unhandled error
+});

@@ -31,4 +31,5 @@ model UserLogin {
   @@index([login_time])
   @@index([uid])
   @@index([email])
+  @@unique([login_time, uid]) // Add composite unique constraint
 }
