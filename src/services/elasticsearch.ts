@@ -7,6 +7,7 @@ import { LogDocument } from '../types';
 const client = new Client({
     cloud: { id: config.elastic.cloudId },
     auth: { apiKey: config.elastic.apiKey },
+    requestTimeout: 300000 // 5 minutes
 });
 
 // Function to fetch logs using scroll API
@@ -20,8 +21,8 @@ export async function* fetchLogs(startDate: string, endDate: string): AsyncGener
         // Initial search request with scroll parameter
         const response = await client.search<LogDocument>({
             index: config.elastic.indexPattern,
-            scroll: '2m', // Keep the search context alive for 2 minutes
-            size: 1000,  // Fetch 1000 docs per scroll page
+            scroll: '5m', // Keep the search context alive for 2 minutes
+            size: 6000,  // Fetch 1000 docs per scroll page
             _source: ["@timestamp", "uid", "payload"], // Specify fields to retrieve
             track_total_hits: true,
             body: { // Use 'body' for query structure

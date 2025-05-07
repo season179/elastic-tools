@@ -37,6 +37,8 @@ async function run() {
     let totalDbSkippedCount = 0; // Renamed for clarity (duplicates skipped by DB)
     // --- End DB Insert Variables ---
 
+    const startTime = process.hrtime.bigint(); // Record start time
+
     try {
         // --- Calculate Date Range ---
         // Construct timezone-aware ISO strings for Elasticsearch
@@ -85,8 +87,10 @@ async function run() {
             processedBatch = [];
         }
 
-        console.log('------------------------------------');
-        console.log('Data processing complete.');
+        const endTime = process.hrtime.bigint(); // Record end time
+        const durationMs = Number(endTime - startTime) / 1_000_000;
+        console.log(`\n--- Summary ---`);
+        console.log(`Total execution time: ${durationMs.toFixed(2)} ms`);
         console.log(`Total documents processed from ES: ${totalProcessedCount}`);
         console.log(`Total payloads skipped during processing: ${totalSkippedPayloadCount}`);
         console.log(`Total records successfully inserted into DB: ${totalInsertedCount}`);
