@@ -41,7 +41,16 @@ export async function* fetchLogs(startDate: string, endDate: string, queryType: 
                 query: {
                     bool: {
                         must: [
-                            { match: { module: queryConfig.module } },
+                            // Different query structure based on query type
+                            ...((queryConfig as any).module 
+                                ? [{ match: { module: (queryConfig as any).module } }]
+                                : []),
+                            ...((queryConfig as any).type 
+                                ? [{ match: { type: (queryConfig as any).type } }]
+                                : []),
+                            ...((queryConfig as any).payloadSearch 
+                                ? [{ match_phrase: { payload: (queryConfig as any).payloadSearch } }]
+                                : []),
                             { match: { action: queryConfig.action } }
                         ],
                         filter: [

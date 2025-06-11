@@ -22,8 +22,10 @@ export const config = {
             action: "response"
         },
         bukopin: {
-            module: "https://103.211.83.99:8310/api/paywatch/inquiry",
-            action: "response"
+            payloadSearch: "https://103.211.83.99:8310/api/paywatch/inquiry",
+            action: "response",
+            module: "Request.post",
+            type: "PayoutService"
         }
     }
     // Add other configuration sections if needed, e.g., database
