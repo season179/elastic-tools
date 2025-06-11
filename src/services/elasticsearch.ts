@@ -11,9 +11,21 @@ const client = new Client({
 });
 
 // Function to fetch logs using scroll API
-export async function* fetchLogs(startDate: string, endDate: string): AsyncGenerator<LogDocument[], void, undefined> {
+export async function* fetchLogs(startDate: string, endDate: string, queryType: string = 'retrieveUserInfo'): AsyncGenerator<LogDocument[], void, undefined> {
     console.log(`Querying index pattern: ${config.elastic.indexPattern}`);
     console.log(`Querying from ${startDate} (>=) to ${endDate} (<)`);
+    console.log(`Using query type: ${queryType}`);
+
+    // Get query configuration
+    const queryConfig = config.queries[queryType as keyof typeof config.queries];
+    if (!queryConfig) {
+        throw new Error(`Unknown query type: ${queryType}`);
+    }
+
+    // Define fields to retrieve based on query type
+    const fieldsToRetrieve = queryType === 'bukopin' 
+        ? ["@timestamp", "payload"] 
+        : ["@timestamp", "uid", "payload"];
 
     let scrollId: string | undefined;
 
@@ -23,14 +35,14 @@ export async function* fetchLogs(startDate: string, endDate: string): AsyncGener
             index: config.elastic.indexPattern,
             scroll: '5m', // Keep the search context alive for 2 minutes
             size: 6000,  // Fetch 1000 docs per scroll page
-            _source: ["@timestamp", "uid", "payload"], // Specify fields to retrieve
+            _source: fieldsToRetrieve, // Specify fields to retrieve
             track_total_hits: true,
             body: { // Use 'body' for query structure
                 query: {
                     bool: {
                         must: [
-                            { match: { module: "RetrieveUserInfo" } },
-                            { match: { action: "response" } }
+                            { match: { module: queryConfig.module } },
+                            { match: { action: queryConfig.action } }
                         ],
                         filter: [
                             {

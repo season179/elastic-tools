@@ -52,18 +52,27 @@ This script connects to an Elasticsearch cluster, retrieves log documents based 
 Run the script using `npm start`, providing the required start and end dates as command-line arguments. Use the `--` separator to pass arguments to the script.
 
 ```bash
-npm start -- --startDate <YYYY-MM-DD> --endDate <YYYY-MM-DD>
+npm start -- --startDate <YYYY-MM-DD> --endDate <YYYY-MM-DD> [--query <QUERY_TYPE>]
 ```
 
 *   `--startDate` (`-s`): The beginning date for the data pull (inclusive), in `YYYY-MM-DD` format.
 *   `--endDate` (`-e`): The ending date for the data pull (exclusive), in `YYYY-MM-DD` format.
+*   `--query` (`-q`): The query type to execute. Available options:
+    *   `retrieveUserInfo` (default): Queries for RetrieveUserInfo module with response action
+    *   `bukopin`: Queries for https://103.211.83.99:8310/api/paywatch/inquiry module with response action
 
-**Example:**
+**Examples:**
 
-To retrieve data from January 15th, 2025 up to (but not including) January 17th, 2025:
+To retrieve RetrieveUserInfo data from January 15th, 2025 up to (but not including) January 17th, 2025:
 
 ```bash
 npm start -- --startDate 2025-01-15 --endDate 2025-01-17
+```
+
+To retrieve bukopin data for the same date range:
+
+```bash
+npm start -- --startDate 2025-01-15 --endDate 2025-01-17 --query bukopin
 ```
 
 This command will fetch data for January 15th and January 16th.

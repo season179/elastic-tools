@@ -9,6 +9,36 @@ export async function disconnectDb() {
     console.log('Disconnected from database.');
 }
 
+// Function to batch insert bukopin records into the database
+export async function batchInsertBukopinRecords(batch: ProcessedLogDocument[]): Promise<{ inserted: number; skipped: number }> {
+    if (batch.length === 0) {
+        return { inserted: 0, skipped: 0 };
+    }
+
+    const recordsToCreate = batch.map(doc => ({
+        timestamp: new Date(doc["@timestamp"]),
+        payload: doc.payload.raw, // Store raw payload as JSON
+    }));
+
+    let insertedCount = 0;
+    let skippedCount = 0;
+
+    try {
+        // Attempt to insert the batch
+        const result = await (prisma as any).bukopinData.createMany({
+            data: recordsToCreate,
+            skipDuplicates: true, // Use Prisma's built-in duplicate skipping
+        });
+        insertedCount = result.count;
+        skippedCount = batch.length - result.count; // Records not inserted were skipped
+    } catch (e) {
+        console.error(`Error during bukopin batch insert:`, e);
+        // If createMany fails entirely (not just skipping duplicates), consider all as failed/skipped for this batch
+        return { inserted: 0, skipped: batch.length };
+    }
+    return { inserted: insertedCount, skipped: skippedCount };
+}
+
 // Function to batch insert records into the database
 export async function batchInsertUserRecords(batch: ProcessedLogDocument[]): Promise<{ inserted: number; skipped: number }> {
     if (batch.length === 0) {

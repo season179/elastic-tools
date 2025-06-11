@@ -1,9 +1,18 @@
 import { LogDocument, ProcessedLogDocument, ProcessedPayload } from '../types';
 
 // Helper function to extract desired fields from a raw log document
-export function extractPayloadFields(source: LogDocument): ProcessedLogDocument | null {
+export function extractPayloadFields(source: LogDocument, queryType: string = 'retrieveUserInfo'): ProcessedLogDocument | null {
     if (!source || !source.payload) {
         return null;
+    }
+
+    // For bukopin queries, return simpler structure with just timestamp and payload
+    if (queryType === 'bukopin') {
+        return {
+            "@timestamp": source["@timestamp"],
+            uid: source.uid || '', // Provide empty string if uid is not available
+            payload: { raw: source.payload } // Store raw payload for bukopin
+        };
     }
 
     let parsedPayload: any;

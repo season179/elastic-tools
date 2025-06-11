@@ -33,3 +33,15 @@ model UserLogin {
   @@index([email])
   @@unique([login_time, uid]) // Add composite unique constraint
 }
+
+// Define the model for Bukopin data
+model BukopinData {
+  id          Int      @id @default(autoincrement()) // Auto-incrementing primary key
+  timestamp   DateTime @db.Timestamp(6)             // Timestamp from @timestamp field
+  payload     Json                                   // Store raw payload as JSON
+  created_at  DateTime @default(now())               // Record creation timestamp
+
+  // Add indexes for faster queries
+  @@index([timestamp])
+  @@unique([timestamp, payload]) // Prevent duplicate entries with same timestamp and payload
+}

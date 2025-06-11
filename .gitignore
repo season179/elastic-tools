@@ -137,3 +137,4 @@ dist
 
 data/
 src/generated/prisma/*.node
+.claude/

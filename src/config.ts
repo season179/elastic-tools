@@ -16,6 +16,16 @@ export const config = {
         apiKey: process.env.ELASTIC_API_KEY as string,
         indexPattern: process.env.ELASTIC_INDEX_PATTERN as string,
     },
+    queries: {
+        retrieveUserInfo: {
+            module: "RetrieveUserInfo",
+            action: "response"
+        },
+        bukopin: {
+            module: "https://103.211.83.99:8310/api/paywatch/inquiry",
+            action: "response"
+        }
+    }
     // Add other configuration sections if needed, e.g., database
     // prisma: { ... }
 };

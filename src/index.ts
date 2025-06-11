@@ -1,7 +1,7 @@
 import yargs from 'yargs/yargs';
 import { config } from './config'; // Import config
 import { fetchLogs } from './services/elasticsearch'; // Import ES service
-import { batchInsertUserRecords, disconnectDb } from './services/database'; // Import DB service
+import { batchInsertUserRecords, batchInsertBukopinRecords, disconnectDb } from './services/database'; // Import DB service
 import { extractPayloadFields } from './processing/logProcessor'; // Import processor
 import { ProcessedLogDocument } from './types'; // Import type
 
@@ -18,6 +18,13 @@ const argv = yargs(process.argv.slice(2))
         description: 'End date in YYYY-MM-DD format (exclusive, interpreted as GMT+08)',
         type: 'string',
         demandOption: true, // Make it required
+    })
+    .option('query', {
+        alias: 'q',
+        description: 'Query type to execute (retrieveUserInfo or bukopin)',
+        type: 'string',
+        default: 'retrieveUserInfo',
+        choices: ['retrieveUserInfo', 'bukopin']
     })
     .help()
     .alias('help', 'h')
@@ -46,13 +53,13 @@ async function run() {
         const esEndDate = `${argv.endDate}T00:00:00+08:00`;
 
         // Use the elasticsearch service to fetch logs
-        for await (const rawDocs of fetchLogs(esStartDate, esEndDate)) {
+        for await (const rawDocs of fetchLogs(esStartDate, esEndDate, argv.query)) {
             totalProcessedCount += rawDocs.length;
             console.log(`Fetched batch of ${rawDocs.length}. Total fetched: ${totalProcessedCount}`);
 
             // --- Optimization: Process documents in the current batch in parallel ---
             const processingPromises = rawDocs.map(rawDoc => 
-                Promise.resolve(extractPayloadFields(rawDoc)) // Wrap in Promise.resolve in case extractPayloadFields is not async
+                Promise.resolve(extractPayloadFields(rawDoc, argv.query)) // Pass query type to processor
             );
             const processedDocs = await Promise.all(processingPromises);
 
@@ -69,7 +76,13 @@ async function run() {
             // Insert batch if it reaches the desired size
             if (processedBatch.length >= batchSize) {
                 console.log(`Processing batch of ${processedBatch.length}...`);
-                const { inserted, skipped } = await batchInsertUserRecords(processedBatch);
+                let result;
+                if (argv.query === 'bukopin') {
+                    result = await batchInsertBukopinRecords(processedBatch);
+                } else {
+                    result = await batchInsertUserRecords(processedBatch);
+                }
+                const { inserted, skipped } = result;
                 totalInsertedCount += inserted;
                 totalDbSkippedCount += skipped;
                 console.log(`Batch processed: ${inserted} inserted, ${skipped} skipped by DB. Total inserted: ${totalInsertedCount}, Total DB skipped: ${totalDbSkippedCount}`);
@@ -80,7 +93,13 @@ async function run() {
         // Insert any remaining documents in the last batch
         if (processedBatch.length > 0) {
             console.log(`Processing final batch of ${processedBatch.length}...`);
-            const { inserted, skipped } = await batchInsertUserRecords(processedBatch);
+            let result;
+            if (argv.query === 'bukopin') {
+                result = await batchInsertBukopinRecords(processedBatch);
+            } else {
+                result = await batchInsertUserRecords(processedBatch);
+            }
+            const { inserted, skipped } = result;
             totalInsertedCount += inserted;
             totalDbSkippedCount += skipped;
             console.log(`Final batch processed: ${inserted} inserted, ${skipped} skipped by DB.`);

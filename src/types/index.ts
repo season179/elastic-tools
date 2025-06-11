@@ -22,6 +22,7 @@ export interface ProcessedPayload {
             salary?: number;
         };
     };
+    raw?: any; // For storing raw payload data (e.g., bukopin queries)
 }
 
 // Define the structure of the fully processed log document ready for DB insertion
